@@ -1,0 +1,48 @@
+name: PoC projectboard
+ 
+on:
+  issues:
+    types: [opened, reopened, transferred]
+  pull_request_target:
+    types: [opened, reopened]
+ 
+permissions: write-all
+ 
+env:
+  ORG: Logius-standaarden
+  PROJECT_NUMBER: "17"   # <-- nummer van het test-project (zie de project-URL)
+ 
+jobs:
+  add:
+    name: Toevoegen met ${{ matrix.token }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        token: [github.token, PROJECT_TOKEN]
+    steps:
+      - name: Voeg toe aan projectboard
+        env:
+          GH_TOKEN: ${{ matrix.token == 'github.token' && github.token || secrets.PROJECT_TOKEN }}
+          CONTENT_ID: ${{ github.event.issue.node_id || github.event.pull_request.node_id }}
+        run: |
+          echo "Token: ${{ matrix.token }}"
+          echo "Item:  $CONTENT_ID"
+ 
+          # Stap 1: project-ID opzoeken (leesrechten op het project)
+          PROJECT_ID=$(gh api graphql \
+            -f query='query($org:String!,$n:Int!){organization(login:$org){projectV2(number:$n){id title}}}' \
+            -f org="$ORG" -F n="$PROJECT_NUMBER" \
+            --jq '.data.organization.projectV2.id') || true
+          if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" = "null" ]; then
+            echo "::error::Stap 1 mislukt: token kan project $PROJECT_NUMBER niet lezen"
+            exit 1
+          fi
+          echo "Stap 1 ok: project $PROJECT_ID"
+ 
+          # Stap 2: item toevoegen (schrijfrechten op het project)
+          gh api graphql \
+            -f query='mutation($p:ID!,$c:ID!){addProjectV2ItemById(input:{projectId:$p,contentId:$c}){item{id}}}' \
+            -f p="$PROJECT_ID" -f c="$CONTENT_ID" \
+            || { echo "::error::Stap 2 mislukt: token mag niet schrijven naar project $PROJECT_NUMBER"; exit 1; }
+          echo "Stap 2 ok: item toegevoegd"
